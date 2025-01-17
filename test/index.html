@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Windows Speech MCP Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .section {
+            margin-bottom: 20px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        textarea {
+            width: 100%;
+            height: 100px;
+            margin: 10px 0;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            resize: vertical;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        select {
+            padding: 8px;
+            margin: 5px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Windows Speech MCP Test</h1>
+        
+        <div class="section">
+            <h2>Text to Speech</h2>
+            <textarea id="ttsText" placeholder="Enter text to speak...">Hello, this is a test of Windows speech synthesis.</textarea>
+            <div>
+                <select id="ttsVoice">
+                    <option value="Microsoft David Desktop">David</option>
+                    <option value="Microsoft Zira Desktop">Zira</option>
+                </select>
+                <select id="ttsSpeed">
+                    <option value="0.5">0.5x Speed</option>
+                    <option value="1.0" selected>1.0x Speed</option>
+                    <option value="1.5">1.5x Speed</option>
+                    <option value="2.0">2.0x Speed</option>
+                </select>
+                <button onclick="speak()">Speak</button>
+            </div>
+            <div id="ttsStatus" class="status"></div>
+        </div>
+
+        <div class="section">
+            <h2>Speech to Text</h2>
+            <div>
+                <select id="sttDuration">
+                    <option value="5">5 seconds</option>
+                    <option value="10">10 seconds</option>
+                    <option value="15">15 seconds</option>
+                    <option value="30">30 seconds</option>
+                </select>
+                <button onclick="startRecording()">Start Recording</button>
+            </div>
+            <textarea id="sttText" placeholder="Transcribed text will appear here..." readonly></textarea>
+            <div id="sttStatus" class="status"></div>
+        </div>
+    </div>
+
+    <script>
+        async function speak() {
+            const text = document.getElementById('ttsText').value;
+            const voice = document.getElementById('ttsVoice').value;
+            const speed = parseFloat(document.getElementById('ttsSpeed').value);
+            const statusDiv = document.getElementById('ttsStatus');
+
+            try {
+                const response = await fetch('http://localhost:3000/tts', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ text, voice, speed })
+                });
+
+                if (!response.ok) throw new Error('Failed to synthesize speech');
+                
+                statusDiv.textContent = 'Speech synthesis successful!';
+                statusDiv.className = 'status success';
+            } catch (error) {
+                statusDiv.textContent = `Error: ${error.message}`;
+                statusDiv.className = 'status error';
+            }
+        }
+
+        async function startRecording() {
+            const duration = parseInt(document.getElementById('sttDuration').value);
+            const statusDiv = document.getElementById('sttStatus');
+            const textArea = document.getElementById('sttText');
+
+            try {
+                statusDiv.textContent = `Recording for ${duration} seconds...`;
+                statusDiv.className = 'status';
+
+                const response = await fetch('http://localhost:3000/stt', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ duration })
+                });
+
+                if (!response.ok) throw new Error('Failed to transcribe speech');
+                
+                const result = await response.json();
+                textArea.value = result.text;
+                statusDiv.textContent = 'Transcription successful!';
+                statusDiv.className = 'status success';
+            } catch (error) {
+                statusDiv.textContent = `Error: ${error.message}`;
+                statusDiv.className = 'status error';
+                textArea.value = '';
+            }
+        }
+
+        // Fetch available voices when the page loads
+        async function loadVoices() {
+            try {
+                const response = await fetch('http://localhost:3000/voices');
+                if (!response.ok) throw new Error('Failed to fetch voices');
+                
+                const voices = await response.json();
+                const voiceSelect = document.getElementById('ttsVoice');
+                voiceSelect.innerHTML = '';
+                
+                voices.forEach(voice => {
+                    const option = document.createElement('option');
+                    option.value = voice;
+                    option.textContent = voice.replace('Microsoft ', '').replace(' Desktop', '');
+                    voiceSelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Failed to load voices:', error);
+            }
+        }
+
+        window.onload = loadVoices;
+    </script>
+</body>
+</html>
