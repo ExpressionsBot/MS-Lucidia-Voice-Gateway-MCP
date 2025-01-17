@@ -21,6 +21,9 @@ interface SpeechToTextArgs {
   duration?: number; // Duration to record in seconds
 }
 
+// Default voice configuration
+const DEFAULT_VOICE = 'Microsoft Jenny(Natural) - English (United States)';
+
 // Helper function to get available Windows voices
 async function getWindowsVoices(): Promise<string[]> {
   try {
@@ -28,7 +31,7 @@ async function getWindowsVoices(): Promise<string[]> {
     return stdout.split('\n').map(v => v.trim()).filter(Boolean);
   } catch (error) {
     console.error('Error getting voices:', error);
-    return ['Microsoft David Desktop', 'Microsoft Zira Desktop']; // Default fallback voices
+    return [DEFAULT_VOICE]; // Default fallback voice
   }
 }
 
@@ -74,7 +77,7 @@ app.get('/voices', async (_req: Request, res: Response) => {
 // Text to Speech
 app.post('/tts', async (req: Request<{}, {}, TextToSpeechArgs>, res: Response) => {
   try {
-    const { text, voice = 'Microsoft David Desktop', speed = 1.0 } = req.body;
+    const { text, voice = DEFAULT_VOICE, speed = 1.0 } = req.body;
     
     if (!text) {
       return res.status(400).json({ error: 'Text is required' });
@@ -139,6 +142,12 @@ app.post('/stt', async (req: Request<{}, {}, SpeechToTextArgs>, res: Response) =
 
     res.json({ text: stdout.trim() || 'No speech detected' });
   } catch (error) {
+    // Clean up the audio file if it exists
+    const audioFile = path.join(__dirname, 'recording.wav');
+    if (fs.existsSync(audioFile)) {
+      await fs.promises.unlink(audioFile);
+    }
+    
     res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
   }
 });

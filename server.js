@@ -4,10 +4,30 @@ const { exec } = require('child_process');
 const { promisify } = require('util');
 const fs = require('fs').promises;
 const path = require('path');
+const { createServer } = require('net');
 
 const execAsync = promisify(exec);
 const app = express();
-const port = 3000;
+
+// Helper function to find an available port
+async function findAvailablePort(startPort) {
+  const isPortAvailable = (port) => {
+    return new Promise((resolve) => {
+      const server = createServer()
+        .listen(port, () => {
+          server.once('close', () => resolve(true));
+          server.close();
+        })
+        .on('error', () => resolve(false));
+    });
+  };
+
+  let port = startPort;
+  while (!(await isPortAvailable(port))) {
+    port++;
+  }
+  return port;
+}
 
 app.use(cors());
 app.use(express.json());
@@ -110,6 +130,17 @@ app.post('/stt', async (req, res) => {
     }
 });
 
-app.listen(port, () => {
-    console.log(`Server running at http://localhost:${port}`);
-});
+// Start the server
+async function startServer() {
+    try {
+        const port = await findAvailablePort(3000);
+        app.listen(port, () => {
+            console.log(`Windows Speech Server running at http://localhost:${port}`);
+        });
+    } catch (error) {
+        console.error('Failed to start server:', error);
+        process.exit(1);
+    }
+}
+
+startServer();
