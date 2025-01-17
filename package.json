@@ -12,7 +12,9 @@
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "express": "^4.18.2"
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "openai": "^4.24.1"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
@@ -30,6 +32,7 @@
     "speech",
     "tts",
     "stt",
+    "gpt4",
     "lucidia"
   ],
   "author": "ExpressionsBot",

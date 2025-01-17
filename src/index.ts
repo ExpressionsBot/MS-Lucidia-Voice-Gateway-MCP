@@ -7,8 +7,22 @@ import { promisify } from 'util';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as net from 'net';
+import OpenAI from 'openai';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const execAsync = promisify(exec);
+
+// Configuration
+const DEFAULT_VOICE = 'Microsoft Jenny(Natural) - English (United States)';
+const DEFAULT_TIMEOUT = parseInt(process.env.TIMEOUT || '30000', 10);
+const DEFAULT_PORT = 3000;
+
+// Initialize OpenAI
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
 
 // Type definitions for request arguments
 interface TextToSpeechArgs {
@@ -18,21 +32,13 @@ interface TextToSpeechArgs {
 }
 
 interface SpeechToTextArgs {
-  duration?: number; // Duration to record in seconds
+  duration?: number;
 }
 
-// Default voice configuration
-const DEFAULT_VOICE = 'Microsoft Jenny(Natural) - English (United States)';
-
-// Helper function to get available Windows voices
-async function getWindowsVoices(): Promise<string[]> {
-  try {
-    const { stdout } = await execAsync('powershell -Command "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices().VoiceInfo.Name"');
-    return stdout.split('\n').map(v => v.trim()).filter(Boolean);
-  } catch (error) {
-    console.error('Error getting voices:', error);
-    return [DEFAULT_VOICE]; // Default fallback voice
-  }
+interface ChatArgs {
+  message: string;
+  voice?: string;
+  speed?: number;
 }
 
 // Helper function to find an available port
@@ -57,12 +63,72 @@ async function findAvailablePort(startPort: number): Promise<number> {
   throw new Error('No available ports found');
 }
 
+// Helper function to get available Windows voices
+async function getWindowsVoices(): Promise<string[]> {
+  try {
+    const { stdout } = await execAsync('powershell -Command "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices().VoiceInfo.Name"', {
+      timeout: DEFAULT_TIMEOUT
+    });
+    return stdout.split('\n').map(v => v.trim()).filter(Boolean);
+  } catch (error) {
+    console.error('Error getting voices:', error);
+    return [DEFAULT_VOICE];
+  }
+}
+
+// Helper function to speak text using Windows TTS
+async function speakText(text: string, voice: string = DEFAULT_VOICE, speed: number = 1.0): Promise<void> {
+  const script = `
+    Add-Type -AssemblyName System.Speech;
+    $synthesizer = New-Object System.Speech.Synthesis.SpeechSynthesizer;
+    $synthesizer.SelectVoice('${voice}');
+    $synthesizer.Rate = ${Math.round((speed - 1) * 10)};
+    $synthesizer.Speak('${text.replace(/'/g, "''")}');
+  `;
+
+  await execAsync(`powershell -Command "${script}"`, { timeout: DEFAULT_TIMEOUT });
+}
+
+// Helper function to get GPT-4 response
+async function getChatResponse(message: string): Promise<string> {
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4",
+      messages: [
+        { 
+          role: "system", 
+          content: "You are a helpful assistant. Keep your responses concise and natural, as they will be spoken aloud."
+        },
+        { 
+          role: "user", 
+          content: message 
+        }
+      ],
+      temperature: 0.7,
+      max_tokens: 150
+    });
+
+    return completion.choices[0]?.message?.content || "I'm sorry, I couldn't generate a response.";
+  } catch (error) {
+    console.error('Error getting GPT-4 response:', error);
+    throw error;
+  }
+}
+
 // Initialize Express app
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 app.use(express.static('test'));
+
+// Add timeout middleware
+app.use((req: Request, res: Response, next) => {
+  res.setTimeout(DEFAULT_TIMEOUT, () => {
+    res.status(408).json({ error: 'Request timeout' });
+  });
+  next();
+});
 
 // Get available voices
 app.get('/voices', async (_req: Request, res: Response) => {
@@ -83,18 +149,14 @@ app.post('/tts', async (req: Request<{}, {}, TextToSpeechArgs>, res: Response) =
       return res.status(400).json({ error: 'Text is required' });
     }
 
-    const script = `
-      Add-Type -AssemblyName System.Speech;
-      $synthesizer = New-Object System.Speech.Synthesis.SpeechSynthesizer;
-      $synthesizer.SelectVoice('${voice}');
-      $synthesizer.Rate = ${Math.round((speed - 1) * 10)};
-      $synthesizer.Speak('${text.replace(/'/g, "''")}');
-    `;
-
-    await execAsync(`powershell -Command "${script}"`);
+    await speakText(text, voice, speed);
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    if (error instanceof Error && error.message.includes('timeout')) {
+      res.status(408).json({ error: 'Operation timed out' });
+    } else {
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
   }
 });
 
@@ -121,7 +183,7 @@ app.post('/stt', async (req: Request<{}, {}, SpeechToTextArgs>, res: Response) =
       $waveFile.Dispose();
     `;
 
-    await execAsync(recordScript);
+    await execAsync(recordScript, { timeout: DEFAULT_TIMEOUT + (duration * 1000) });
 
     // Transcribe the recorded audio
     const transcribeScript = `
@@ -135,7 +197,7 @@ app.post('/stt', async (req: Request<{}, {}, SpeechToTextArgs>, res: Response) =
       $result.Text;
     `;
 
-    const { stdout } = await execAsync(`powershell -Command "${transcribeScript}"`);
+    const { stdout } = await execAsync(`powershell -Command "${transcribeScript}"`, { timeout: DEFAULT_TIMEOUT });
 
     // Clean up the audio file
     await fs.promises.unlink(audioFile);
@@ -148,16 +210,52 @@ app.post('/stt', async (req: Request<{}, {}, SpeechToTextArgs>, res: Response) =
       await fs.promises.unlink(audioFile);
     }
     
-    res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    if (error instanceof Error && error.message.includes('timeout')) {
+      res.status(408).json({ error: 'Operation timed out' });
+    } else {
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+});
+
+// Chat endpoint that gets GPT-4 response and speaks it
+app.post('/chat', async (req: Request<{}, {}, ChatArgs>, res: Response) => {
+  try {
+    const { message, voice = DEFAULT_VOICE, speed = 1.0 } = req.body;
+    
+    if (!message) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    // Get GPT-4 response
+    const response = await getChatResponse(message);
+    
+    // Speak the response
+    await speakText(response, voice, speed);
+
+    res.json({ 
+      success: true,
+      response,
+      spoken: true
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('timeout')) {
+      res.status(408).json({ error: 'Operation timed out' });
+    } else {
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
   }
 });
 
 // Start the server
 async function startServer() {
   try {
-    const port = await findAvailablePort(3000);
+    const port = await findAvailablePort(DEFAULT_PORT);
     app.listen(port, () => {
       console.log(`Windows Speech Server running at http://localhost:${port}`);
+      console.log(`Using default voice: ${DEFAULT_VOICE}`);
+      console.log(`Timeout set to: ${DEFAULT_TIMEOUT}ms`);
+      console.log('GPT-4 integration enabled');
     });
   } catch (error) {
     console.error('Failed to start server:', error);
